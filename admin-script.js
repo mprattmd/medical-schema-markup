@@ -53,15 +53,23 @@ jQuery(document).ready(function($) {
                     // Add physicians if found
                     if (data.physicians && data.physicians.length > 0) {
                         $('#physicians-container').empty();
-                        data.physicians.forEach(function(physician, index) {
+                        data.physicians.forEach(function(physician) {
                             addPhysician(physician);
+                        });
+                    }
+                    
+                    // Add locations if found
+                    if (data.locations && data.locations.length > 0) {
+                        $('#locations-container').empty();
+                        data.locations.forEach(function(location) {
+                            addLocation(location);
                         });
                     }
                     
                     // Add services if found
                     if (data.services && data.services.length > 0) {
                         $('#services-container').empty();
-                        data.services.forEach(function(service, index) {
+                        data.services.forEach(function(service) {
                             addService(service);
                         });
                     }
@@ -219,11 +227,27 @@ jQuery(document).ready(function($) {
     
     // Add location
     var locationIndex = $('#locations-container .location-entry').length;
-    $('.add-location').on('click', function() {
+    
+    function addLocation(data) {
         var template = $('#location-template').html();
-        template = template.replace(/INDEX/g, locationIndex);
-        $('#locations-container').append(template);
+        var $html = $(template.replace(/INDEX/g, locationIndex));
+        
+        if (data) {
+            $html.find('input[name*="[name]"]').val(data.name || '');
+            $html.find('input[name*="[street]"]').val(data.street || '');
+            $html.find('input[name*="[city]"]').val(data.city || '');
+            $html.find('input[name*="[state]"]').val(data.state || '');
+            $html.find('input[name*="[postal]"]').val(data.postal || '');
+            $html.find('input[name*="[phone]"]').val(data.phone || '');
+            $html.find('input[name*="[email]"]').val(data.email || '');
+        }
+        
+        $('#locations-container').append($html);
         locationIndex++;
+    }
+    
+    $('.add-location').on('click', function() {
+        addLocation(null);
     });
     
     $(document).on('click', '.remove-location', function() {
@@ -243,6 +267,8 @@ jQuery(document).ready(function($) {
         
         if (data) {
             $html.find('input[name*="[name]"]').val(data.name || '');
+            $html.find('input[name*="[title]"]').val(data.title || '');
+            $html.find('input[name*="[specialty]"]').val(data.specialty || '');
             $html.find('textarea[name*="[bio]"]').val(data.bio || '');
             $html.find('input[name*="[image]"]').val(data.image || '');
         }

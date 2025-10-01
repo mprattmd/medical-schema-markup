@@ -2,8 +2,8 @@
 /**
  * Plugin Name: Medical Schema Markup Generator Pro
  * Plugin URI: https://github.com/mprattmd/medical-schema-markup
- * Description: Automatically generates and manages schema markup for medical practices
- * Version: 2.0.1
+ * Description: Automatically generates and manages schema markup for medical practices with enhanced site analysis
+ * Version: 2.0.2
  * Author: Your Name
  * License: GPL v2 or later
  */
@@ -357,10 +357,181 @@ class Medical_Schema_Plugin {
             'email' => get_option('admin_email')
         );
         
+        // Get logo
         $custom_logo_id = get_theme_mod('custom_logo');
         if ($custom_logo_id) {
             $logo = wp_get_attachment_image_src($custom_logo_id, 'full');
             if ($logo) $data['logo'] = $logo[0];
+        }
+        
+        // Analyze pages for phone numbers and addresses
+        $pages = get_pages(array('number' => 20));
+        foreach ($pages as $page) {
+            // Look for phone numbers
+            if (empty($data['phone']) && preg_match('/\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/', $page->post_content, $matches)) {
+                $data['phone'] = $matches[0];
+            }
+        }
+        
+        // Find contact page for address
+        $contact_page = get_page_by_path('contact');
+        if (!$contact_page) $contact_page = get_page_by_path('contact-us');
+        if (!$contact_page) $contact_page = get_page_by_path('locations');
+        
+        $data['locations'] = array();
+        
+        if ($contact_page) {
+            $content = $contact_page->post_content;
+            
+            // Try to extract address
+            $location = array();
+            
+            // Street address
+            if (preg_match('/(\d+\s+[\w\s]+(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Lane|Ln|Drive|Dr|Court|Ct|Circle|Cir|Way|Parkway|Pkwy)\.?)/i', $content, $matches)) {
+                $location['street'] = trim($matches[1]);
+            }
+            
+            // City, State, Zip
+            if (preg_match('/([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*),\s*([A-Z]{2})\s+(\d{5}(?:-\d{4})?)/', $content, $matches)) {
+                $location['city'] = $matches[1];
+                $location['state'] = $matches[2];
+                $location['postal'] = $matches[3];
+            }
+            
+            // Phone for this location
+            if (preg_match('/\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/', $content, $matches)) {
+                $location['phone'] = $matches[0];
+            }
+            
+            if (!empty($location['street']) || !empty($location['city'])) {
+                $location['name'] = 'Main Office';
+                $data['locations'][] = $location;
+            }
+        }
+        
+        // Look for multiple locations in location/contact pages
+        $location_pages = get_posts(array(
+            'post_type' => 'page',
+            'posts_per_page' => 5,
+            's' => 'location OR office OR address'
+        ));
+        
+        foreach ($location_pages as $loc_page) {
+            if ($loc_page->ID == ($contact_page->ID ?? 0)) continue; // Skip if already processed
+            
+            $content = $loc_page->post_content;
+            $location = array();
+            
+            // Extract location name from title or content
+            $location['name'] = $loc_page->post_title;
+            
+            // Street address
+            if (preg_match('/(\d+\s+[\w\s]+(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Lane|Ln|Drive|Dr)\.?)/i', $content, $matches)) {
+                $location['street'] = trim($matches[1]);
+            }
+            
+            // City, State, Zip
+            if (preg_match('/([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*),\s*([A-Z]{2})\s+(\d{5}(?:-\d{4})?)/', $content, $matches)) {
+                $location['city'] = $matches[1];
+                $location['state'] = $matches[2];
+                $location['postal'] = $matches[3];
+            }
+            
+            // Phone
+            if (preg_match('/\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/', $content, $matches)) {
+                $location['phone'] = $matches[0];
+            }
+            
+            if (!empty($location['street']) && count($data['locations']) < 5) {
+                $data['locations'][] = $location;
+            }
+        }
+        
+        // Find physicians
+        $data['physicians'] = array();
+        
+        // Search for doctor/physician posts and pages
+        $doctor_posts = get_posts(array(
+            'post_type' => array('page', 'post', 'team', 'doctor', 'physician', 'provider', 'staff'),
+            'posts_per_page' => 20,
+            's' => 'doctor OR physician OR dr OR MD DO'
+        ));
+        
+        foreach ($doctor_posts as $doctor) {
+            $title = $doctor->post_title;
+            $content = $doctor->post_content;
+            
+            // Check if this looks like a doctor profile
+            $is_doctor = (
+                stripos($title, 'dr.') !== false || 
+                stripos($title, 'dr ') !== false || 
+                stripos($title, 'doctor') !== false ||
+                stripos($content, 'physician') !== false ||
+                preg_match('/\b(MD|DO|DDS|DMD)\b/', $content)
+            );
+            
+            if ($is_doctor) {
+                $physician = array(
+                    'name' => strip_tags($title)
+                );
+                
+                // Clean up name - remove "Dr." prefix if it's in the title
+                $physician['name'] = preg_replace('/^(Dr\.?|Doctor)\s+/i', '', $physician['name']);
+                
+                // Extract specialty from content
+                if (preg_match('/(?:specialty|specializes? in|board certified in)[\s:]+([^<.\n]{10,50})/i', $content, $matches)) {
+                    $physician['specialty'] = trim(strip_tags($matches[1]));
+                }
+                
+                // Look for common titles
+                if (preg_match('/\b(Cardiologist|Dermatologist|Pediatrician|Internist|Surgeon|Psychiatrist|Neurologist|Oncologist|Radiologist|Anesthesiologist|Orthopedic|Family Medicine|General Practice|Internal Medicine)\b/i', $content, $matches)) {
+                    if (empty($physician['specialty'])) {
+                        $physician['specialty'] = $matches[1];
+                    }
+                    $physician['title'] = $matches[1];
+                }
+                
+                // Get bio (first 50 words of content)
+                $bio = strip_tags($content);
+                $bio = preg_replace('/\s+/', ' ', $bio); // Clean whitespace
+                $physician['bio'] = wp_trim_words($bio, 50);
+                
+                // Get featured image
+                if (has_post_thumbnail($doctor->ID)) {
+                    $physician['image'] = get_the_post_thumbnail_url($doctor->ID, 'medium');
+                }
+                
+                // Only add if we have a reasonable name (not just generic titles)
+                if (!empty($physician['name']) && 
+                    strlen($physician['name']) > 3 && 
+                    !preg_match('/^(our|meet|about|staff|team|doctors?|physicians?)$/i', $physician['name']) &&
+                    count($data['physicians']) < 15) {
+                    $data['physicians'][] = $physician;
+                }
+            }
+        }
+        
+        // Find services
+        $data['services'] = array();
+        $services_page = get_page_by_path('services');
+        if (!$services_page) $services_page = get_page_by_path('our-services');
+        if (!$services_page) $services_page = get_page_by_path('treatments');
+        
+        if ($services_page) {
+            // Extract service names from headings
+            if (preg_match_all('/<h[2-4][^>]*>(.*?)<\/h[2-4]>/i', $services_page->post_content, $matches)) {
+                foreach (array_slice($matches[1], 0, 15) as $service_name) {
+                    $service_name = strip_tags($service_name);
+                    $service_name = trim($service_name);
+                    
+                    // Filter out generic headings
+                    if (strlen($service_name) > 5 && 
+                        strlen($service_name) < 100 &&
+                        !preg_match('/^(our|about|why|what|when|where|how|contact|home|services)$/i', $service_name)) {
+                        $data['services'][] = array('name' => $service_name);
+                    }
+                }
+            }
         }
         
         wp_send_json_success($data);
@@ -445,6 +616,21 @@ class Medical_Schema_Plugin {
         if (!empty($data['phone'])) $schema['telephone'] = $data['phone'];
         if (!empty($data['email'])) $schema['email'] = $data['email'];
         
+        // Add first location as main address
+        if (!empty($data['locations']) && is_array($data['locations'])) {
+            $first_location = reset($data['locations']);
+            if (!empty($first_location['street'])) {
+                $schema['address'] = array(
+                    '@type' => 'PostalAddress',
+                    'streetAddress' => $first_location['street'] ?? '',
+                    'addressLocality' => $first_location['city'] ?? '',
+                    'addressRegion' => $first_location['state'] ?? '',
+                    'postalCode' => $first_location['postal'] ?? '',
+                    'addressCountry' => 'US'
+                );
+            }
+        }
+        
         if (!empty($data['rating_value']) && !empty($data['review_count'])) {
             $schema['aggregateRating'] = array(
                 '@type' => 'AggregateRating',
@@ -457,12 +643,65 @@ class Medical_Schema_Plugin {
             $schema['isAcceptingNewPatients'] = true;
         }
         
+        // Add social media profiles
         if (!empty($data['social']) && is_array($data['social'])) {
             $urls = array();
             foreach ($data['social'] as $url) {
                 if (!empty($url) && filter_var($url, FILTER_VALIDATE_URL)) $urls[] = $url;
             }
             if (!empty($urls)) $schema['sameAs'] = $urls;
+        }
+        
+        // Add physicians
+        if (!empty($data['physicians']) && is_array($data['physicians'])) {
+            $physicians = array();
+            foreach ($data['physicians'] as $physician) {
+                if (!empty($physician['name'])) {
+                    $physician_schema = array(
+                        '@type' => 'Physician',
+                        'name' => $physician['name']
+                    );
+                    
+                    if (!empty($physician['specialty'])) {
+                        $physician_schema['medicalSpecialty'] = $physician['specialty'];
+                    }
+                    if (!empty($physician['title'])) {
+                        $physician_schema['jobTitle'] = $physician['title'];
+                    }
+                    if (!empty($physician['bio'])) {
+                        $physician_schema['description'] = $physician['bio'];
+                    }
+                    if (!empty($physician['image'])) {
+                        $physician_schema['image'] = $physician['image'];
+                    }
+                    
+                    $physicians[] = $physician_schema;
+                }
+            }
+            if (!empty($physicians)) {
+                $schema['employee'] = $physicians;
+            }
+        }
+        
+        // Add services
+        if (!empty($data['services']) && is_array($data['services'])) {
+            $services = array();
+            foreach ($data['services'] as $service) {
+                if (!empty($service['name'])) {
+                    $services[] = array(
+                        '@type' => 'MedicalProcedure',
+                        'name' => $service['name'],
+                        'description' => $service['description'] ?? ''
+                    );
+                }
+            }
+            if (!empty($services)) {
+                $schema['hasOfferCatalog'] = array(
+                    '@type' => 'OfferCatalog',
+                    'name' => 'Medical Services',
+                    'itemListElement' => $services
+                );
+            }
         }
         
         return $schema;
